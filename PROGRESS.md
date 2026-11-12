@@ -170,4 +170,6 @@ If you use the shorter version, be ready to say in the interview that actual wea
 ## The project is complete. Optional next steps (only if Jip asks)
 
 - Model B: LightGBM as a comparison (in the original scope as "only if time is left").
-- Put the folder on GitHub: `git init`, first commit, push. Not done yet.
+- Git: repository made and first commit done on branch `main` (2026-11-12). Raw data is not in git.
+- Still to do by Jip: make an empty repository on github.com, then
+  `git remote add origin <url>` and `git push -u origin main`.
