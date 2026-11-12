@@ -1,5 +1,6 @@
-model,MAE,RMSE,MAE_vs_yesterday_%,RMSE_vs_yesterday_%
-Naive: same hour yesterday,23.94,37.23,0.0,0.0
-Naive: same hour last week,30.09,45.69,25.7,22.72
-OLS regression,17.79,25.87,-25.67,-30.5
-OLS without weather (check),21.65,31.3,-9.56,-15.92
+model,MAE,RMSE,bias,MAE_vs_yesterday_%,RMSE_vs_yesterday_%,DM_stat,DM_p_value
+Naive: same hour yesterday,23.94,37.23,-0.04,0.0,0.0,,
+Naive: same hour last week,30.09,45.69,0.31,25.7,22.72,-4.45,8.63e-06
+"OLS, forecast weather",18.29,26.33,-1.97,-23.58,-29.28,6.81,9.76e-12
+"OLS, actual weather (upper bound)",17.79,25.87,3.36,-25.67,-30.5,7.76,8.67e-15
+"OLS, no weather",21.65,31.3,-0.04,-9.56,-15.92,4.21,2.57e-05

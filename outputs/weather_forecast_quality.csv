@@ -1,0 +1,4 @@
+variable,mean_actual,mean_forecast,bias,MAE,correlation
+solar_wm2,142.854,134.191,-8.662,18.807,0.982
+wind100_ms,6.734,7.731,0.997,1.254,0.932
+temp_c,11.42,11.498,0.079,0.629,0.992

@@ -25,12 +25,166 @@ python data/download_data.py     # writes data/raw/*.csv (not in git)
 python src/check_data.py         # prints checks, saves outputs/figures/01_data_check.png
 python src/build_dataset.py      # writes data/processed/dataset.csv (not in git)
 python src/benchmarks.py         # prints benchmark MAE/RMSE, writes outputs/forecasts_test.csv
-python src/model_ols.py          # fits OLS, adds column "ols", writes outputs/results.csv
+python src/model_ols.py          # fits OLS, scores it with forecast / actual / no weather
+python src/dm_test.py            # Diebold-Mariano test, adds DM columns to outputs/results.csv
 python src/evaluate.py           # makes the two result charts in outputs/figures/
 python src/make_summary_pdf.py   # builds outputs/summary.pdf
 ```
 
 Or everything in one go: `python main.py` (add `--download` to fetch the data again).
+
+## UPGRADE PHASE (started 2026-11-12)
+
+Goal: make the result truly out-of-sample and statistically tested. Two upgrades, nothing else:
+(1) real weather forecasts instead of actual weather, (2) Diebold-Mariano test.
+Keep all old results as comparison rows.
+
+| # | Upgrade milestone | Status |
+|---|-------------------|--------|
+| U1 | Check which Open-Meteo forecast data exists for 2023–2025 | DONE |
+| U2 | Jip decides the split + forecast lead time | DONE: Jip said "Yes, go ahead" with the recommended plan |
+| U3 | Download forecast weather, add to dataset | DONE |
+| U4 | Re-run models with forecast weather | DONE (Jip chose RAW forecasts, no level correction) |
+| U5 | Diebold-Mariano test (daily mean abs-error loss, HAC) | DONE |
+| U6 | Update README, PDF, PROGRESS, new CV bullet | DONE |
+| U7 | Commit + push to GitHub (remote origin = github.com/JipdeBoerEUR/Dutch-day-ahead-electricity-price-forecast) | DONE (2026-11-12) |
+
+### U1 – what the Open-Meteo forecast archives cover (checked by API calls, De Bilt + Groningen)
+
+**Previous Runs API** (`previous-runs-api.open-meteo.com`, variables `*_previous_day1`, `*_previous_day2`):
+- 2023: NO data. Model `icon_seamless` (same for default `best_match`):
+  solar + temperature start 19–20 Jan 2024, wind 100 m starts 16–17 Feb 2024.
+- All three variables, day1 and day2, complete from **17 Feb 2024 12:00 UTC**. 0 gaps after that. 2025 is 100% complete.
+- Other models start later (ECMWF, KNMI: March 2024). GFS has temperature for 2023 but not solar/wind.
+- Meaning of the names (Open-Meteo docs): `_previous_day1` = value predicted 24 hours before the
+  valid time, `_previous_day2` = 48 hours before.
+
+**Historical Forecast API** (`historical-forecast-api.open-meteo.com`):
+- Covers all of 2023–2025 with no gaps (best_match, ICON, GFS, KNMI).
+- BUT it glues together the newest model runs, so each value is a forecast only a few hours old.
+  That is almost the same as actual weather. It is NOT a day-ahead forecast, so it does not fix the problem.
+
+**Two problems found:**
+1. `_previous_day1` leaks for afternoon hours. The auction closes at 12:00 on D-1. A forecast made
+   24 hours before delivery hour 15:00 was made at 15:00 on D-1, after the auction closed.
+   Only `_previous_day2` (made on D-2) is safely before the deadline for all 24 hours.
+2. Forecast data starts 17 Feb 2024, so a model trained on forecasts has only 10.5 months of training
+   data, with no January and almost no February. The January month dummy cannot be estimated.
+
+**Proposed plan (recommended, waiting for Jip's OK):**
+- Keep train = 2023–2024 and test = 2025 unchanged. Keep the same model and coefficients
+  (fitted on actual weather). In 2025, feed the model the real forecast instead of actual weather.
+- Use `_previous_day2` for all hours, model `icon_seamless`, same 5 locations.
+- Alternative (Option A): train on forecast weather only, 18 Feb – 31 Dec 2024, test 2025,
+  without month dummies. Consistent inputs, but short training period and a changed model.
+
+Note: the Previous Runs API is slow (requests for 2 years timed out at 180 s). The download script
+asks for 3 months at a time with retries.
+
+### U3 – forecast weather downloaded and added (decision: recommended plan)
+
+Files changed: `data/download_data.py` (new function `download_weather_forecast`, skips files that
+already exist, `--force` to download again), `src/build_dataset.py`, `main.py`.
+New raw file: `data/raw/weather_forecast_nl_hourly.csv` (2025 only, 8,760 rows, 0 gaps, 0 duplicates).
+New dataset columns: `solar_wm2_fc`, `wind100_ms_fc`, `temp_c_fc` (empty before 2025, complete in 2025).
+New output: `outputs/weather_forecast_quality.csv`.
+
+Settings: model `icon_seamless`, lead `previous_day2` (predicted 48 hours before the hour), same 5 locations.
+All 5 locations downloaded without gaps, so the coverage is confirmed for every location.
+
+Forecast vs actual weather in 2025:
+
+| Variable | Mean actual | Mean forecast | Bias | MAE | Correlation |
+|----------|-------------|---------------|------|-----|-------------|
+| Solar (W/m²) | 142.85 | 134.19 | -8.66 | 18.81 | 0.98 |
+| Wind 100 m (m/s) | 6.73 | 7.73 | +1.00 | 1.25 | 0.93 |
+| Temperature (°C) | 11.42 | 11.50 | +0.08 | 0.63 | 0.99 |
+
+**Finding: the wind forecast is on average 1.0 m/s higher than the "actual" wind.** The two come from
+different weather models (forecast = DWD ICON, actual = ERA5 reanalysis), so part of this is a level
+difference between the products, not only forecast error. The OLS wind coefficient is -6.07 EUR/MWh
+per m/s, so feeding raw forecasts will push the price forecast about 6 EUR/MWh down on average.
+This must NOT be corrected with 2025 data (that would be look-ahead). A fair correction would use
+forecasts and actuals from 17 Feb – 31 Dec 2024 only. Decide BEFORE looking at the model results.
+
+### U4 – models re-run with forecast weather (raw forecasts, decided before looking at results)
+
+Files changed: `src/model_ols.py`, `src/evaluate.py`.
+`outputs/forecasts_test.csv` now has columns `ols_fc` (main), `ols_actual`, `ols_noweather` (old column `ols` = `ols_actual`).
+`outputs/results.csv` has a new `bias` column (forecast minus actual).
+
+Test set 2025. Model fitted once on 2023–2024 with actual weather; only the 2025 inputs differ per row.
+
+| Model | MAE | RMSE | Bias | MAE vs yesterday | RMSE vs yesterday |
+|-------|-----|------|------|------------------|-------------------|
+| Naive: same hour yesterday | 23.94 | 37.23 | -0.04 | – | – |
+| Naive: same hour last week | 30.09 | 45.69 | +0.31 | +25.7% | +22.7% |
+| **OLS, forecast weather (MAIN)** | **18.29** | **26.33** | **-1.97** | **-23.6%** | **-29.3%** |
+| OLS, actual weather (upper bound, old result) | 17.79 | 25.87 | +3.36 | -25.7% | -30.5% |
+| OLS, no weather | 21.65 | 31.30 | -0.04 | -9.6% | -15.9% |
+
+- **Honest headline: -23.6% MAE with real 48-hour weather forecasts** (was -25.7% with perfect weather).
+  Real forecasts cost only 0.50 EUR/MWh of MAE. Most of the weather gain survives.
+- Bias moved from +3.36 to -1.97, as expected from the +1.0 m/s wind forecast bias.
+- Charts now show the main model (`ols_fc`). Sample week by the same median rule is now 3–9 Feb 2025
+  (OLS MAE 17.61, naive 22.37; best week 11.19, worst week 31.76).
+- By hour: OLS still wins in 24 of 24 hours, but at night (hours 22–4) the gain is now only 1–7%.
+  Morning ramp (hours 6–9) still about -31% to -39%.
+
+KNOWN BROKEN until U6: `src/make_summary_pdf.py` still looks for the old row names
+("OLS regression", "OLS without weather (check)"). Fix it in U6 together with README.
+
+Next (U5): add `src/dm_test.py`. Diebold-Mariano test vs "same hour yesterday" for `ols_fc`,
+`ols_actual`, `ols_noweather`. Loss = absolute error. Average the loss difference per delivery day
+(365 values), then test mean = 0 with Newey-West (HAC) standard errors. Report DM statistic + p-value,
+and add both to `outputs/results.csv`.
+
+### U5 – Diebold-Mariano test
+
+File made: `src/dm_test.py` (added to `main.py` after the OLS step).
+It adds `DM_stat` and `DM_p_value` to `outputs/results.csv`.
+
+Method: loss = absolute error. Loss difference = naive loss minus model loss, averaged per delivery
+day (365 days). Test mean = 0 with Newey-West (HAC) standard errors, 7 lags. Two-sided p-value.
+Positive DM = model better than "same hour yesterday".
+
+| Model | Mean daily gain (EUR/MWh) | Days better | DM statistic | p-value |
+|-------|---------------------------|-------------|--------------|---------|
+| Naive: same hour last week | -6.15 | 40.5% | -4.45 | 8.6e-06 |
+| **OLS, forecast weather (MAIN)** | **5.65** | **66.0%** | **6.81** | **9.8e-12** |
+| OLS, actual weather (upper bound) | 6.15 | 66.6% | 7.76 | 8.7e-15 |
+| OLS, no weather | 2.29 | 57.8% | 4.21 | 2.6e-05 |
+
+- **All three OLS versions are significantly better than the naive forecast (p < 0.001).**
+- "Last week" is significantly WORSE than "yesterday".
+- Robust to the lag choice: for the main model DM = 8.55 / 6.81 / 6.39 / 6.34 with 0 / 7 / 14 / 28 lags.
+- Honest nuance: the OLS model is better on 66% of days, not on all days. It loses on 1 day in 3.
+
+Next (U6): fix `src/make_summary_pdf.py` (new row names + DM columns), rewrite README results and
+limitations, new CV bullet. Headline numbers: MAE 18.29 vs 23.94 (-23.6%), RMSE 26.33 vs 37.23 (-29.3%),
+DM 6.81, p < 0.001. Then U7: commit + push.
+
+### U6 – documents updated
+
+Files changed: `README.md` (results, method, limitations, next steps), `src/make_summary_pdf.py`
+(new 5-row table with DM statistic and p-value) -> `outputs/summary.pdf`.
+`python main.py` ran end to end without errors after the changes. All numbers come from that run.
+
+**NEW CV bullet (use this one; it replaces the bullet in "Milestone 6" below):**
+
+> Built a day-ahead power price forecasting model for the Netherlands in Python on public
+> Fraunhofer ISE and Open-Meteo data; using only weather forecasts available before gate closure,
+> an OLS regression cut MAE by 24% vs. a naive benchmark out-of-sample (2025), statistically
+> significant in a Diebold-Mariano test (p < 0.001).
+
+Shorter version:
+
+> Built a Dutch day-ahead power price model on public Fraunhofer ISE/Open-Meteo data; cut MAE by
+> 24% vs. a naive benchmark out-of-sample (2025, Diebold-Mariano p < 0.001).
+
+Exact numbers behind it: MAE 18.29 vs 23.94 EUR/MWh (-23.6%), RMSE 26.33 vs 37.23 (-29.3%), DM 6.81.
+
+Next (U7): commit + push to the remote origin (Jip has already added it).
 
 ## Milestone 1 – result
 
@@ -153,7 +307,7 @@ Files made: `README.md`, `main.py` (runs all steps), `src/make_summary_pdf.py` -
 - The PDF reads its numbers from `outputs/results.csv`, so it cannot drift from the real results.
 - To add a surname to the PDF: change `AUTHOR` at the top of `src/make_summary_pdf.py` and re-run it.
 
-**CV bullet (recommended, honest version):**
+**OLD CV bullet (superseded by the one in section U6, kept for the record):**
 
 > Built a day-ahead power price forecasting model for the Netherlands in Python on public
 > Fraunhofer ISE and Open-Meteo data (26,000 hourly observations); an OLS regression reduced MAE

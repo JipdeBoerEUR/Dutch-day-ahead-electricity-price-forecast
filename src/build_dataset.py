@@ -9,7 +9,10 @@ It writes data/processed/dataset.csv with one row per hour:
     price       the price we want to forecast (EUR/MWh)
     price_d1    price in the same clock hour yesterday
     price_d7    price in the same clock hour one week ago
-    solar_wm2, wind100_ms, temp_c   weather in that hour (proxy for the forecast)
+    solar_wm2, wind100_ms, temp_c   ACTUAL weather in that hour
+    solar_wm2_fc, wind100_ms_fc, temp_c_fc
+                                    weather FORECAST for that hour, made 48 hours
+                                    ahead (2025 only; empty in the training years)
     hour, weekday, month            calendar info in Dutch local time
     split       "train" (2023-2024) or "test" (2025)
 """
@@ -49,9 +52,13 @@ def lagged_price(df, days):
 def main():
     prices = load("prices_nl_hourly.csv").rename(columns={"price_eur_mwh": "price"})
     weather = load("weather_nl_hourly.csv")
+    forecast = load("weather_forecast_nl_hourly.csv")
 
-    # 1. Merge: one row per hour with price + weather.
+    # 1. Merge: one row per hour with price + actual weather.
     df = prices.merge(weather, on="time_utc", how="inner", validate="one_to_one")
+    #    Add the weather forecast. It only exists for 2025, so we keep all rows
+    #    ("left" merge) and the forecast columns stay empty before 2025.
+    df = df.merge(forecast, on="time_utc", how="left", validate="one_to_one")
     df = df.sort_values("time_utc").reset_index(drop=True)
 
     # 2. Calendar features in Dutch local time (the market follows local time).
@@ -75,21 +82,26 @@ def main():
     # 5. Train / test split by calendar year.
     df["split"] = df["year"].map(lambda y: "test" if y == 2025 else "train")
 
-    columns = [
+    actual_columns = ["solar_wm2", "wind100_ms", "temp_c"]
+    forecast_columns = [name + "_fc" for name in actual_columns]
+    base_columns = [
         "time_utc", "date", "year", "month", "weekday", "hour",
         "price", "price_d1", "price_d7",
-        "solar_wm2", "wind100_ms", "temp_c", "split",
-    ]
+    ] + actual_columns
+    columns = base_columns + forecast_columns + ["split"]
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / "dataset.csv"
     df[columns].to_csv(out, index=False)
 
     # ---- Report -----------------------------------------------------------
+    is_test = df["split"] == "test"
     print("=" * 60)
     print("DATASET BUILT")
     print("=" * 60)
     print(f"rows: {len(df):,}   (dropped first {dropped} hours = 7 days)")
-    print(f"empty values: {int(df[columns].isna().sum().sum())}")
+    print(f"empty values (prices, lags, actual weather): {int(df[base_columns].isna().sum().sum())}")
+    print(f"empty forecast values in the 2025 test set:  "
+          f"{int(df.loc[is_test, forecast_columns].isna().sum().sum())}")
 
     print("\nTRAIN / TEST")
     for name, part in df.groupby("split", sort=False):
@@ -112,7 +124,26 @@ def main():
     features = ["price_d1", "price_d7", "solar_wm2", "wind100_ms", "temp_c"]
     print(train[["price"] + features].corr()["price"].drop("price").round(2).to_string())
 
-    print(f"\nSaved: {out.relative_to(ROOT)}")
+    # How good is the 48-hour weather forecast? Compare it with what really happened.
+    test = df[is_test]
+    print("\nWEATHER FORECAST vs ACTUAL WEATHER, 2025 (forecast made 48 hours ahead)")
+    rows = []
+    for actual, fc in zip(actual_columns, forecast_columns):
+        error = test[fc] - test[actual]
+        rows.append({
+            "variable": actual,
+            "mean_actual": test[actual].mean(),
+            "mean_forecast": test[fc].mean(),
+            "bias": error.mean(),
+            "MAE": error.abs().mean(),
+            "correlation": test[fc].corr(test[actual]),
+        })
+    quality = pd.DataFrame(rows).set_index("variable")
+    print(quality.round(2).to_string())
+    (ROOT / "outputs").mkdir(exist_ok=True)
+    quality.round(3).to_csv(ROOT / "outputs" / "weather_forecast_quality.csv")
+
+    print(f"\nSaved: {out.relative_to(ROOT)}, outputs/weather_forecast_quality.csv")
 
 
 if __name__ == "__main__":

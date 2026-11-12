@@ -4,7 +4,8 @@ Run from the project folder (after src/model_ols.py):
 
     python src/evaluate.py
 
-It reads outputs/forecasts_test.csv and saves:
+It reads outputs/forecasts_test.csv and makes two charts for the main model
+(OLS with real weather forecasts) against the naive benchmark:
 
     outputs/figures/02_sample_week.png   forecast vs actual for one typical week
     outputs/figures/03_mae_by_hour.png   average error for each hour of the day
@@ -49,11 +50,11 @@ def style(ax, title, subtitle):
         ax.spines[side].set_visible(False)
     ax.tick_params(length=0)
     lines = subtitle.count("\n") + 1          # leave room for a 1- or 2-line subtitle
-    ax.set_title(title, loc="left", color=INK, fontsize=12, fontweight="bold", pad=8 + 14 * lines)
-    ax.text(0, 1.0, subtitle, transform=ax.transAxes, color=MUTED, fontsize=9.5,
+    ax.set_title(title, loc="left", color=INK, fontsize=12, fontweight="bold", pad=14 + 14 * lines)
+    ax.text(0, 1.03, subtitle, transform=ax.transAxes, color=MUTED, fontsize=9.5,
             va="bottom", ha="left", linespacing=1.3)
     # The legend sits above the plot, on the right, out of the way of the data.
-    ax.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=3, frameon=False,
+    ax.legend(loc="lower right", bbox_to_anchor=(1.0, 1.03), ncol=3, frameon=False,
               fontsize=9, labelcolor=MUTED, handlelength=1.6, columnspacing=1.4,
               borderaxespad=0.2)
 
@@ -115,7 +116,7 @@ def chart_mae_by_hour(by_hour):
     style(
         ax,
         "Forecast error by hour of day, 2025 test set",
-        "Mean absolute error per hour. Lower is better.",
+        "Mean absolute error per hour. Lower is better. OLS uses 48-hour weather forecasts.",
     )
     fig.tight_layout()
     fig.savefig(FIG_DIR / "03_mae_by_hour.png", dpi=200, facecolor="white")
@@ -124,6 +125,8 @@ def chart_mae_by_hour(by_hour):
 
 def main():
     df = pd.read_csv(OUT_DIR / "forecasts_test.csv")
+    # The charts show the MAIN model: OLS fed with real weather forecasts.
+    df = df.rename(columns={"ols_fc": "ols"})
     # Dutch clock time, for the x-axis of the week chart.
     df["local"] = pd.to_datetime(df["time_utc"], utc=True).dt.tz_convert(TZ).dt.tz_localize(None)
     FIG_DIR.mkdir(parents=True, exist_ok=True)
