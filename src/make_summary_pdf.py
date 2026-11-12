@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import pandas as pd
 
-AUTHOR = "Jip · BSc Econometrics & Operations Research, Erasmus University Rotterdam"
+AUTHOR = "Jip de Boer · BSc Econometrics & Operations Research, Erasmus University Rotterdam"
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "outputs"
