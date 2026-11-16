@@ -1,0 +1,5 @@
+forecast,profit_eur,capture_rate,profit_eur_per_mw_year,hour_ranking_score,full_cycles,avg_buy_price,avg_sell_price,days_with_loss,hours_charge_and_discharge
+Perfect foresight (upper bound),62869.4073,1.0,62869.4073,1.0,360.9528,36.5741,142.4369,0,0
+"OLS, forecast weather (main)",54997.0998,0.8748,54997.0998,0.8743,364.923,41.2713,135.2875,6,0
+Naive: same hour yesterday,50484.559,0.803,50484.559,0.7846,360.9528,42.0833,130.4744,22,0
+"OLS, no weather",53357.3213,0.8487,53357.3213,0.8305,364.846,40.4085,131.9769,14,0

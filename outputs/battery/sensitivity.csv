@@ -1,0 +1,21 @@
+duration_h,degradation_eur_mwh,forecast,profit_eur,capture_rate,gain_vs_naive_eur,full_cycles,days_with_loss
+1.0,10.0,Perfect foresight (upper bound),32840.9762,1.0,6893.4535,362.5,0
+1.0,10.0,"OLS, forecast weather (main)",28375.1553,0.864,2427.6326,365.0,5
+1.0,10.0,Naive: same hour yesterday,25947.5227,0.7901,0.0,362.5,19
+1.0,10.0,"OLS, no weather",27383.5023,0.8338,1435.9797,365.0,17
+2.0,0.0,Perfect foresight (upper bound),69772.5272,1.0,12344.6799,365.0,0
+2.0,0.0,"OLS, forecast weather (main)",61922.7753,0.8875,4494.928,365.0,2
+2.0,0.0,Naive: same hour yesterday,57427.8473,0.8231,0.0,365.0,11
+2.0,0.0,"OLS, no weather",60282.0968,0.864,2854.2495,365.0,5
+2.0,10.0,Perfect foresight (upper bound),62869.4073,1.0,12384.8483,360.9528,0
+2.0,10.0,"OLS, forecast weather (main)",54997.0998,0.8748,4512.5408,364.923,6
+2.0,10.0,Naive: same hour yesterday,50484.559,0.803,0.0,360.9528,22
+2.0,10.0,"OLS, no weather",53357.3213,0.8487,2872.7623,364.846,14
+2.0,20.0,Perfect foresight (upper bound),56126.9377,1.0,12320.0464,346.9071,0
+2.0,20.0,"OLS, forecast weather (main)",47777.2259,0.8512,3970.3345,362.3246,24
+2.0,20.0,Naive: same hour yesterday,43806.8914,0.7805,0.0,346.9327,37
+2.0,20.0,"OLS, no weather",46398.9188,0.8267,2592.0275,353.6734,33
+4.0,10.0,Perfect foresight (upper bound),109444.6691,1.0,18766.7118,354.7608,0
+4.0,10.0,"OLS, forecast weather (main)",98312.822,0.8983,7634.8647,362.0402,7
+4.0,10.0,Naive: same hour yesterday,90677.9573,0.8285,0.0,354.7864,22
+4.0,10.0,"OLS, no weather",96242.4991,0.8794,5564.5418,360.8537,16

@@ -28,10 +28,204 @@ python src/benchmarks.py         # prints benchmark MAE/RMSE, writes outputs/for
 python src/model_ols.py          # fits OLS, scores it with forecast / actual / no weather
 python src/dm_test.py            # Diebold-Mariano test, adds DM columns to outputs/results.csv
 python src/evaluate.py           # makes the two result charts in outputs/figures/
-python src/make_summary_pdf.py   # builds outputs/summary.pdf
+python battery/check_one_day.py  # checks the one-day battery LP against hand calculations
+python battery/backtest.py       # trades the battery through 2025, writes outputs/battery/*.csv
+python battery/sensitivity.py    # other battery durations and degradation costs
+python battery/charts.py         # makes the two battery charts
+python src/make_summary_pdf.py   # builds outputs/summary.pdf (two pages)
 ```
 
 Or everything in one go: `python main.py` (add `--download` to fetch the data again).
+
+## BATTERY PHASE (started 2026-11-16) – "How much money is a better price forecast worth?"
+
+To continue in a new session, say: "Read PROGRESS.md and continue with the next battery milestone."
+
+Goal: simulate a grid battery trading the Dutch day-ahead market in 2025. Each day: plan 24 hours
+with a linear program on a price FORECAST, then settle against the ACTUAL prices.
+Everything lives in the new folder `battery/`. Input: `outputs/forecasts_test.csv`.
+
+Scope (strict, from Jip):
+- Battery: 1 MW, 2 MWh, 90% round-trip efficiency, max 1 full cycle per day, starts and ends each
+  day at 50%. Degradation cost 10 EUR/MWh discharged (a parameter).
+- 4 forecasts: perfect foresight (`price`), OLS forecast weather (`ols_fc`, main),
+  naive yesterday (`naive_d1`), OLS no weather (`ols_noweather`).
+- Metrics: realised profit 2025 (EUR), capture rate = profit / perfect-foresight profit,
+  value of forecasting = profit(OLS) - profit(naive) in EUR per MW per year.
+- Sensitivity (only these): duration 1h / 2h / 4h; degradation 0 / 10 / 20 EUR/MWh.
+- Charts: cumulative profit over 2025 per forecast; one example day (prices + charge/discharge).
+- Limitations to list in README: no intraday/balancing market, no grid fees, price-taker, hourly not 15-min.
+- Be honest: if the better forecast adds little money, say so and explain why.
+- Stop after each milestone and show Jip. Give 3–5 interview bullets each time.
+
+| # | Battery milestone | Status |
+|---|-------------------|--------|
+| B1 | LP for one day + check by hand | DONE (2026-11-16) |
+| B2 | Full 2025 run for the 4 forecasts | DONE (2026-11-16) |
+| B3 | Sensitivity (duration, degradation) | DONE (2026-11-16) |
+| B4 | Charts | DONE (2026-11-16) |
+| B5 | README section "From forecast to profit", PDF, CV bullet | DONE (2026-11-16) |
+| B6 | Commit + push | DONE (2026-11-16) |
+
+The battery phase is complete.
+
+### B1 – one-day LP (DONE)
+
+Files made: `battery/battery_lp.py` (the model), `battery/check_one_day.py` (the checks).
+`scipy>=1.11` added to `requirements.txt`. Not yet in `main.py` (add the battery step in B2).
+
+Functions in `battery_lp.py`:
+- `Battery(...)` – dataclass with all settings (power, duration, efficiency, cycles, start level, degradation).
+- `optimise_day(prices, battery)` – solves the LP (scipy `linprog`, HiGHS). Returns charge, discharge, soc.
+- `settle(plan, actual_prices, battery)` – real profit of a plan at the actual prices.
+- `check_plan(plan, battery)` – True/False per battery rule.
+
+The LP, per hour t (variables: charge, discharge, soc):
+- Maximise: sum of price x discharge - price x charge - degradation x discharge.
+- 1. Energy balance: soc[t] = soc[t-1] + 0.949 x charge[t] - discharge[t] / 0.949.
+- 2. One inverter: charge[t] + discharge[t] <= 1 MW.
+- 3. Cycle limit: energy taken out of the battery per day <= 1 x capacity (2 MWh).
+- 4. Power: 0 <= charge, discharge <= 1 MW.
+- 5. Capacity: 0 <= soc <= 2 MWh.
+- 6. Start and end of day at 50% (1 MWh).
+
+Modelling choices (say these in the README):
+- The 90% round trip is split evenly: sqrt(0.9) = 0.949 in each direction.
+- "1 cycle" is measured inside the battery: 2 MWh taken out = 1.897 MWh sold to the grid.
+- Degradation cost is per MWh SOLD to the grid.
+- Days are Dutch local days (the `date` column), so the LP handles 23- and 25-hour days.
+- It is a pure LP (no yes/no variables). Constraint 2 makes charging and discharging in the same
+  hour unattractive, but cannot forbid it. It could happen at very negative prices with a full
+  battery (burning energy to get paid). `check_plan` counts this. CHECK IN B2 how often it happens.
+
+Checks (`python battery/check_one_day.py`, all passed):
+
+| Check | LP | By hand |
+|-------|----|---------|
+| A. Toy day, battery without losses | 160.00 EUR | -10 + 120 + 100 - 50 = 160 |
+| B. Same toy day, real battery | 125.35 EUR | 125.35 (formula in the script) |
+| C. Flat prices | 0.00 EUR (does nothing) | 0 |
+| D. Real day 14 May 2025, perfect foresight | 349.24 EUR | all 6 battery rules hold |
+
+Toy day = 50 EUR/MWh all day, hour 3 = 10, hour 19 = 120, hour 20 = 100.
+
+### B2 – full 2025 run (DONE 2026-11-16)
+
+File made: `battery/backtest.py`. Added to `main.py` as step 7 (with `check_one_day.py`).
+Outputs in `outputs/battery/`: `results.csv`, `daily_profit.csv`, `schedules.csv` (hourly plans).
+Reusable functions for B3/B4: `load_data()`, `run_backtest(data, battery)`, `summarise(...)`.
+
+Battery 1 MW / 2 MWh, 90% round trip, 1 cycle per day, degradation 10 EUR/MWh. 365 days of 2025.
+
+| Forecast | Profit 2025 (EUR) | Capture rate | Hour ranking score | Days with a loss |
+|----------|-------------------|--------------|--------------------|------------------|
+| Perfect foresight (upper bound) | 62,869 | 100.0% | 1.00 | 0 |
+| **OLS, forecast weather (main)** | **54,997** | **87.5%** | 0.87 | 6 |
+| Naive: same hour yesterday | 50,485 | 80.3% | 0.78 | 22 |
+| OLS, no weather | 53,357 | 84.9% | 0.83 | 14 |
+
+- **Value of forecasting = 54,997 - 50,485 = 4,513 EUR per MW per year** (+8.9% vs naive, 12.4 EUR per day).
+- It is real, not noise: daily gain 12.4 EUR, Newey-West t = 6.8 (7 lags). OLS wins on 59% of days,
+  loses on 32%, ties on 9%. (Now in the repo: `backtest.py` writes `value_of_forecasting.csv`
+  and `profit_by_month.csv`.)
+- **Honest point 1: 24% better MAE became only 9% more profit.** The battery needs the ORDER of the
+  hours (when is it cheap, when expensive), not the price level. The naive forecast gets the order
+  mostly right already (ranking score 0.78 vs 0.87). A big part of the naive error is the daily price
+  LEVEL (18.4 EUR/MWh vs 11.0 for OLS), and a level error costs the battery nothing.
+- **Honest point 2: weather adds little money.** OLS without weather already gets 84.9%.
+  Weather adds 1,640 EUR per year (t = 2.7). For MAE, weather was most of the gain; for profit it is
+  about one third. From March to September "no weather" even earns slightly more than the main model.
+- **Where the gain comes from:** winter. Jan + Feb + Oct + Nov + Dec = 2,831 of the 4,513 EUR.
+  In April the gain is 5 EUR. In summer the solar pattern repeats every day, so "yesterday" is a
+  good plan. Mondays gain most (+36 EUR per day): for naive, "yesterday" is a Sunday.
+- The naive forecast is not bad at all: 80% of the perfect profit with zero modelling.
+- Even perfect foresight is only 62,869 EUR per MW per year in the day-ahead market alone.
+- Average buy / sell price (EUR/MWh): perfect 36.6 / 142.4, OLS 41.3 / 135.3, naive 42.1 / 130.5.
+- Checks: all 1,460 daily plans obey all battery rules. **0 hours with charge and discharge together**,
+  so the pure LP is fine (no need for yes/no variables). Profit recomputed from `schedules.csv` matches.
+
+### B3 – sensitivity (DONE 2026-11-16)
+
+File made: `battery/sensitivity.py` (in `main.py` as step 7). Output: `outputs/battery/sensitivity.csv`.
+One thing changed at a time. 5 different batteries, 4 forecasts each. The base case gives exactly
+the B2 numbers again. Profit in EUR per MW per year, 2025.
+
+A. Battery duration (degradation 10 EUR/MWh):
+
+| Duration | Perfect | OLS (main) | Naive | OLS no weather | OLS capture | Naive capture | Value of forecasting |
+|----------|---------|------------|-------|----------------|-------------|---------------|----------------------|
+| 1 h | 32,841 | 28,375 | 25,948 | 27,384 | 86.4% | 79.0% | 2,428 (+9.4%) |
+| **2 h (base)** | 62,869 | 54,997 | 50,485 | 53,357 | 87.5% | 80.3% | 4,513 (+8.9%) |
+| 4 h | 109,445 | 98,313 | 90,678 | 96,242 | 89.8% | 82.9% | 7,635 (+8.4%) |
+
+B. Degradation cost (duration 2 h):
+
+| Degradation (EUR/MWh) | Perfect | OLS (main) | Naive | OLS no weather | OLS capture | Naive capture | Value of forecasting |
+|-----------------------|---------|------------|-------|----------------|-------------|---------------|----------------------|
+| 0 | 69,773 | 61,923 | 57,428 | 60,282 | 88.7% | 82.3% | 4,495 (+7.8%) |
+| **10 (base)** | 62,869 | 54,997 | 50,485 | 53,357 | 87.5% | 80.3% | 4,513 (+8.9%) |
+| 20 | 56,127 | 47,777 | 43,807 | 46,399 | 85.1% | 78.0% | 3,970 (+9.1%) |
+
+- **The conclusion is robust.** In all 5 cases OLS beats naive by 8–9% (7.8% to 9.4%), and the order
+  of the four forecasts never changes.
+- In EUR the value of forecasting grows with battery size (2,428 / 4,513 / 7,635), simply because a
+  bigger battery trades more energy. As a percentage it stays the same.
+- **Longer battery = forecast errors matter less.** Capture rate 86.4% -> 87.5% -> 89.8%. A 4 h battery
+  spreads its trades over many hours, so missing THE cheapest or dearest hour hurts less.
+- **Diminishing returns to size.** Perfect profit per MWh of capacity: 32.8k (1 h), 31.4k (2 h),
+  27.4k (4 h). The extra hours it trades have a smaller price spread.
+- **Higher degradation = forecast errors matter more.** Capture rate 88.7% -> 87.5% -> 85.1%.
+  The battery must now also decide IF a trade is worth it. OLS loss days: 2 / 6 / 24.
+  At 20 EUR/MWh perfect foresight skips trades (347 cycles), OLS still trades 362: it over-trades.
+- Each 10 EUR/MWh of degradation costs about 7,000 EUR per year (about 1.9 MWh sold x 365 days x 10).
+
+### B4 – charts (DONE 2026-11-16)
+
+File made: `battery/charts.py`. Outputs: `outputs/figures/04_battery_cumulative_profit.png`,
+`outputs/figures/05_battery_example_day.png`.
+
+- Chart 1: cumulative profit over 2025, one line per forecast, totals written at the line ends.
+- Chart 2: example day. Top = actual price and OLS forecast. Bottom = charge / discharge bars of
+  the OLS plan.
+- **Example day: Monday 24 February 2025.** Chosen by a rule: the 24-hour day with the median
+  OLS-plan profit. Profit that day: OLS plan 136 EUR, perfect foresight 141 EUR, naive plan 38 EUR.
+- The day shows the main finding: at night the forecast is 50–70 EUR/MWh too high, but the plan is
+  almost perfect, because the cheap and expensive hours are in the right place.
+- Be honest in an interview: this ONE day flatters OLS (97% capture, naive does badly because
+  "yesterday" was a Sunday). Over the year it is 87.5% vs 80.3%.
+- Colours: perfect/actual black, OLS blue `#2a78d6`, naive orange `#eb6834`, OLS no weather aqua
+  `#1baf7a` (checked for colour-blind safety).
+
+### B5 – README, PDF, CV bullet (DONE 2026-11-16)
+
+- `README.md`: new section "From forecast to profit" (set-up, LP, results table, why 24% -> 9%,
+  sensitivity table, 2 charts, limitations). Intro, "How to run" and folder structure updated.
+- `src/make_summary_pdf.py` rewritten for two pages (small `Page` class). Page 1 is the old page.
+  Page 2 is the battery page; it reads its numbers from `outputs/battery/*.csv`.
+- `main.py` order: steps 1–5 forecast, step 6 battery (check, backtest, sensitivity, charts),
+  step 7 PDF. `python main.py` ran end to end without errors (2026-11-16).
+
+**CV bullet for the battery extension (add it under the forecasting bullet):**
+
+> Quantified the value of the forecast with a battery-dispatch linear program (Python, HiGHS):
+> a simulated 1 MW / 2 MWh battery on the Dutch day-ahead market earned 9% more with the OLS
+> forecast than with a naive forecast (about EUR 4,500 per MW per year, 2025 out-of-sample),
+> capturing 87% of perfect-foresight profit.
+
+Shorter version:
+
+> Simulated battery trading on the Dutch day-ahead market with a linear program; the OLS forecast
+> added 9% profit vs. a naive forecast (EUR 4,500 per MW per year, 2025 out-of-sample).
+
+Exact numbers behind it: 54,997 vs 50,485 EUR (+4,513, +8.9%), perfect foresight 62,869,
+capture 87.5% vs 80.3%, Newey-West t = 6.8.
+Do NOT call it a business case or "battery revenue": it is the day-ahead market only, with no
+intraday or balancing income and no grid fees. Be ready to say that 24% better MAE gave only 9%
+more profit, and why (the battery needs the order of the hours, not the price level).
+
+### B6 – commit + push
+
+See the status table at the top of this section.
 
 ## UPGRADE PHASE (started 2026-11-12)
 

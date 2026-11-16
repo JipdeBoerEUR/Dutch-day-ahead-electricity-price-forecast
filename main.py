@@ -20,7 +20,11 @@ STEPS = [
     ("4. OLS model", "src/model_ols.py"),
     ("4. Diebold-Mariano test", "src/dm_test.py"),
     ("5. Evaluation charts", "src/evaluate.py"),
-    ("6. PDF summary", "src/make_summary_pdf.py"),
+    ("6. Battery: check the one-day LP", "battery/check_one_day.py"),
+    ("6. Battery: trade through 2025", "battery/backtest.py"),
+    ("6. Battery: sensitivity", "battery/sensitivity.py"),
+    ("6. Battery: charts", "battery/charts.py"),
+    ("7. PDF summary", "src/make_summary_pdf.py"),
 ]
 
 

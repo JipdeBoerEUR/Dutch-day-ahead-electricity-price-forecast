@@ -8,7 +8,11 @@ by 23.6% against the best naive benchmark. It only uses weather forecasts that w
 the auction closed. A Diebold-Mariano test shows the gain is statistically significant
 (DM = 6.81, p < 0.001).
 
-A one-page summary is in [outputs/summary.pdf](outputs/summary.pdf).
+**And what is that worth?** A 1 MW / 2 MWh battery that trades on the OLS forecast earns about
+4,500 EUR per year more than one that trades on the naive forecast (+9%). See
+[From forecast to profit](#from-forecast-to-profit).
+
+A two-page summary is in [outputs/summary.pdf](outputs/summary.pdf).
 
 ## Question
 
@@ -112,6 +116,111 @@ The sample week was chosen by a rule, not by eye: of all full weeks in 2025 it h
 OLS beats the naive forecast in all 24 hours. The gain is largest in the morning ramp
 (hours 6–9, 31–39%). At night (hours 22–4) it is small, only 1–7%.
 
+## From forecast to profit
+
+**How much money is a better price forecast worth?** To find out, a simulated grid battery trades
+the Dutch day-ahead market through 2025, once with each forecast.
+
+**Short answer: about 4,500 EUR per MW per year.** That is 9% more profit than with the naive
+forecast. The gain is real, but much smaller than the 24% gain in MAE.
+
+### Set-up
+
+- **Battery:** 1 MW power, 2 MWh capacity, 90% round-trip efficiency, at most 1 full cycle per day.
+  It starts and ends every day half full. Wear (degradation) costs 10 EUR per MWh sold.
+- **Each day:** a linear program picks the 24 hourly charge and discharge amounts that give the
+  highest profit at the *forecast* prices. The plan is then paid at the *actual* prices.
+- **Four forecasts:** perfect foresight (the actual prices, an upper bound), the main OLS model,
+  the naive "same hour yesterday", and OLS without weather.
+- **Capture rate** = profit / profit with perfect foresight.
+
+The linear program (solved with HiGHS through `scipy.optimize.linprog`):
+
+```
+maximise   sum over hours of  price x discharge - price x charge - 10 x discharge
+
+subject to
+  1. energy balance   stored[t] = stored[t-1] + 0.949 x charge[t] - discharge[t] / 0.949
+  2. one inverter     charge[t] + discharge[t] <= 1 MW
+  3. cycle limit      energy taken out of the battery in a day <= 2 MWh
+  4. power            0 <= charge[t], discharge[t] <= 1 MW
+  5. capacity         0 <= stored[t] <= 2 MWh
+  6. start and end    stored = 1 MWh (50%)
+```
+
+0.949 is the square root of 0.90: the loss is split evenly over charging and discharging.
+The solver was checked against a small example solved by hand (`battery/check_one_day.py`).
+
+### Results
+
+2025, 365 days, EUR for a 1 MW battery (so also EUR per MW per year).
+
+| Forecast | Profit 2025 | Capture rate | vs naive | Hour ranking score | Days with a loss |
+|----------|-------------|--------------|----------|--------------------|------------------|
+| Perfect foresight (upper bound) | 62,869 | 100.0% | – | 1.00 | 0 |
+| **OLS, forecast weather** | **54,997** | **87.5%** | **+4,513** | **0.87** | **6** |
+| Naive: same hour yesterday | 50,485 | 80.3% | – | 0.78 | 22 |
+| OLS, no weather | 53,357 | 84.9% | +2,873 | 0.83 | 14 |
+
+- **Value of forecasting = 54,997 − 50,485 = 4,513 EUR per MW per year** (+8.9%).
+- It is not noise. The gain is 12.4 EUR per day on average (Newey-West t = 6.8). OLS earns more
+  than naive on 59% of days, less on 32%, and the same on 9%.
+
+![Cumulative battery profit in 2025](outputs/figures/04_battery_cumulative_profit.png)
+
+### Why 24% better MAE gives only 9% more profit
+
+- **A battery trades the shape of the day, not the level.** It only needs to know *which* hours
+  are cheap and which are expensive. The "hour ranking score" measures this: the rank correlation
+  between forecast and actual prices within a day, averaged over all days.
+- **The naive forecast already knows the shape.** Its ranking score is 0.78, against 0.87 for OLS.
+  Much of its MAE comes from getting the price *level* of the day wrong, and that costs a battery
+  nothing. It captures 80% of the perfect profit with no model at all.
+- **Weather adds little money.** OLS without weather already captures 84.9%. Weather adds
+  1,640 EUR per year. For MAE, weather gave most of the gain; for profit, about one third.
+- **The gain comes from winter.** January, February and October–December give 2,831 of the
+  4,513 EUR. In April the gain is 5 EUR: in sunny months the daily pattern repeats, so
+  "yesterday" is already a good plan.
+
+![Prices and battery plan on a typical day](outputs/figures/05_battery_example_day.png)
+
+The example day was chosen by a rule: of all 24-hour days it has the median profit with the OLS
+plan. It shows the point above. At night the forecast is 50–70 EUR/MWh too high, but the plan is
+still almost perfect, because the cheap and expensive hours are in the right place. One day is
+an illustration, not evidence: over the year the OLS plan captures 87.5%, not 97%.
+
+### Sensitivity
+
+One setting is changed at a time. Profit in EUR per MW per year.
+
+| Battery | Perfect | OLS | Naive | OLS capture | Naive capture | Value of forecasting |
+|---------|---------|-----|-------|-------------|---------------|----------------------|
+| 1 h (1 MWh) | 32,841 | 28,375 | 25,948 | 86.4% | 79.0% | 2,428 (+9.4%) |
+| **2 h (2 MWh), base** | 62,869 | 54,997 | 50,485 | 87.5% | 80.3% | 4,513 (+8.9%) |
+| 4 h (4 MWh) | 109,445 | 98,313 | 90,678 | 89.8% | 82.9% | 7,635 (+8.4%) |
+| Degradation 0 EUR/MWh | 69,773 | 61,923 | 57,428 | 88.7% | 82.3% | 4,495 (+7.8%) |
+| Degradation 20 EUR/MWh | 56,127 | 47,777 | 43,807 | 85.1% | 78.0% | 3,970 (+9.1%) |
+
+- **The conclusion is robust.** OLS beats naive by 8–9% in every case.
+- **A longer battery forgives forecast errors.** It spreads its trades over more hours, so
+  missing the single best hour hurts less.
+- **A higher wear cost makes forecast errors more expensive.** The battery must also decide *if*
+  a trade is worth it. At 20 EUR/MWh the OLS plan trades too often and loses money on 24 days.
+
+### Limitations of the battery simulation
+
+- **Day-ahead only.** No intraday or balancing market. Real batteries earn a large part of their
+  income there, so this is not a business case.
+- **No grid fees or taxes.** Transport tariffs and connection costs are left out.
+- **Price taker.** The battery does not move the price. Fine for 1 MW, not for a large fleet.
+- **Hourly, not 15-minute.** From 1 October 2025 the market clears per quarter-hour. I use the
+  hourly average, which hides part of the price spread.
+- **A fixed plan.** The battery commits to volumes. A real trader sends price-limited bids
+  ("buy only below X"), which protects against forecast errors.
+- **Each day on its own.** The rule "end the day half full" is simple, but sometimes forces a
+  purchase in an expensive last hour.
+- **One year, one fixed model.** Same caveats as the forecast itself.
+
 ## Limitations
 
 - **Trained on actual weather, tested on forecasts.** The two come from different weather models
@@ -157,16 +266,24 @@ add `--download` to fetch everything again. Each step can also be run on its own
 | 4 | `src/model_ols.py` | Fits the OLS model and scores it |
 | 4 | `src/dm_test.py` | Diebold-Mariano test against the naive benchmark |
 | 5 | `src/evaluate.py` | Makes the two result charts |
-| 6 | `src/make_summary_pdf.py` | Builds the one-page PDF |
+| 6 | `battery/check_one_day.py` | Checks the one-day battery LP against answers worked out by hand |
+| 6 | `battery/backtest.py` | Trades the battery through 2025 with each forecast |
+| 6 | `battery/sensitivity.py` | Repeats it for other battery sizes and wear costs |
+| 6 | `battery/charts.py` | Makes the two battery charts |
+| 7 | `src/make_summary_pdf.py` | Builds the two-page PDF |
+
+The battery model itself is in `battery/battery_lp.py`.
 
 ## Folder structure
 
 ```
 data/download_data.py     download script (raw data is not committed)
 src/                      one script per step, plus metrics.py
-outputs/results.csv       results table
+battery/                  battery model (linear program) and its scripts
+outputs/results.csv       forecast results table
+outputs/battery/          battery results: profit per forecast, per day, hourly plans
 outputs/figures/          charts
-outputs/summary.pdf       one-page summary
+outputs/summary.pdf       two-page summary
 main.py                   runs everything
 requirements.txt
 ```
